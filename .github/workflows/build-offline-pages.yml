@@ -1,0 +1,64 @@
+name: Build offline PWA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Build self-contained site
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/vendor/pdf-lib dist/vendor/ghostscript
+          cp index.html manifest.webmanifest icon.svg README.md dist/
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js -o dist/vendor/pdf-lib/pdf-lib.min.js
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs -o dist/vendor/ghostscript/gs.mjs
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.js -o dist/vendor/ghostscript/gs.js
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.wasm -o dist/vendor/ghostscript/gs.wasm
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/LICENSE -o dist/vendor/ghostscript/LICENSE
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('dist/index.html')
+          s=p.read_text()
+          s=s.replace('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js','./vendor/pdf-lib/pdf-lib.min.js')
+          s=s.replace('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs','./vendor/ghostscript/gs.mjs')
+          s=s.replace("https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f","./vendor/ghostscript/'+f")
+          p.write_text(s)
+          PY
+          cat > dist/sw.js <<'EOF'
+          const CACHE='local-pdf-tools-offline-v2';
+          const SHELL=['./','./index.html','./manifest.webmanifest','./icon.svg','./vendor/pdf-lib/pdf-lib.min.js','./vendor/ghostscript/gs.mjs','./vendor/ghostscript/gs.js','./vendor/ghostscript/gs.wasm'];
+          self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
+          self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+          self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(res=>{if(res&&res.ok){const copy=res.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return res})))});
+          EOF
+          touch dist/.nojekyll
+          if grep -R 'cdn.jsdelivr.net' dist/index.html dist/sw.js; then echo 'External runtime dependency remains' >&2; exit 1; fi
+
+      - name: Publish gh-pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git checkout --orphan offline-pages
+          git rm -rf .
+          cp -a dist/. .
+          rm -rf dist
+          git add -A
+          git commit -m "Deploy offline PWA"
+          git push --force origin HEAD:gh-pages
