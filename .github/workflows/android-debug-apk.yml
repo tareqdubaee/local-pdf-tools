@@ -38,6 +38,11 @@ jobs:
           s=s.replace("if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('sw.js').catch(()=>{});",'')
           p.write_text(s)
           PY
+          ! grep -R -E 'https?://|cdn\.jsdelivr\.net' app/src/main/assets/www/index.html app/src/main/assets/www/vendor/ghostscript/gs.mjs app/src/main/assets/www/vendor/ghostscript/gs.js
+          test -s app/src/main/assets/www/vendor/pdf-lib/pdf-lib.min.js
+          test -s app/src/main/assets/www/vendor/ghostscript/gs.mjs
+          test -s app/src/main/assets/www/vendor/ghostscript/gs.js
+          test -s app/src/main/assets/www/vendor/ghostscript/gs.wasm
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
