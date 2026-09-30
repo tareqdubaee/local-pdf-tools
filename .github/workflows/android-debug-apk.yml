@@ -1,0 +1,47 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [android]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Prepare bundled offline web assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/www/vendor/pdf-lib app/src/main/assets/www/vendor/ghostscript
+          cp index.html icon.svg app/src/main/assets/www/
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js -o app/src/main/assets/www/vendor/pdf-lib/pdf-lib.min.js
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs -o app/src/main/assets/www/vendor/ghostscript/gs.mjs
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.js -o app/src/main/assets/www/vendor/ghostscript/gs.js
+          curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.wasm -o app/src/main/assets/www/vendor/ghostscript/gs.wasm
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/assets/www/index.html')
+          s=p.read_text()
+          s=s.replace('<link rel="manifest" href="manifest.webmanifest">','')
+          s=s.replace('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js','./vendor/pdf-lib/pdf-lib.min.js')
+          s=s.replace('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs','./vendor/ghostscript/gs.mjs')
+          s=s.replace("https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f","./vendor/ghostscript/'+f")
+          s=s.replace("if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('sw.js').catch(()=>{});",'')
+          p.write_text(s)
+          PY
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-pdf-tools-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
