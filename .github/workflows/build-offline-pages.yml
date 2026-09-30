@@ -37,10 +37,23 @@ jobs:
           s=s.replace('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js','./vendor/pdf-lib/pdf-lib.min.js')
           s=s.replace('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs','./vendor/ghostscript/gs.mjs')
           s=s.replace("https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f","./vendor/ghostscript/'+f")
+
+          # Stage-based compression progress. Ghostscript WASM callMain is synchronous and
+          # does not expose reliable byte/page progress, so we avoid displaying fake precision.
+          s=s.replace('</style>', '.progress{display:none;margin-top:10px}.progress.show{display:block}.progress-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:12px;color:#666}.progress-track{height:9px;background:#e6e6e6;border-radius:999px;overflow:hidden}.progress-fill{height:100%;width:0;background:#111;border-radius:999px;transition:width .25s ease}.progress-fill.busy{animation:pulse 1.2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}</style>')
+          s=s.replace('<button id="compressRun" class="btn primary" disabled>Compress PDF</button><div id="compressResult"', '<button id="compressRun" class="btn primary" disabled>Compress PDF</button><div id="compressProgress" class="progress" role="status" aria-live="polite"><div class="progress-head"><span id="compressStage">Ready</span><span id="compressPct">0%</span></div><div class="progress-track"><div id="compressFill" class="progress-fill"></div></div></div><div id="compressResult"')
+          s=s.replace("function status(s){$('status').textContent=s}", "function status(s){$('status').textContent=s}function cprog(p,label,busy=false){let box=$('compressProgress'),fill=$('compressFill');box.classList.add('show');$('compressPct').textContent=p+'%';$('compressStage').textContent=label;fill.style.width=p+'%';fill.classList.toggle('busy',busy)}function cprogReset(){let box=$('compressProgress'),fill=$('compressFill');if(!box)return;box.classList.remove('show');$('compressPct').textContent='0%';$('compressStage').textContent='Ready';fill.style.width='0%';fill.classList.remove('busy')}")
+          s=s.replace("$('compressFile').onchange=()=>{clean();compressFile=", "$('compressFile').onchange=()=>{clean();cprogReset();compressFile=")
+          s=s.replace("try{clean();$('compressRun').disabled=true;let preset=", "try{clean();cprog(10,'Preparing PDF…');$('compressRun').disabled=true;let preset=")
+          s=s.replace("gs=await getGS();try{gs.FS.unlink(input)}", "gs=await getGS();cprog(30,'Compression engine ready');try{gs.FS.unlink(input)}")
+          s=s.replace("gs.FS.writeFile(input,data);data=null;status('Compressing locally ('+preset+')…');", "gs.FS.writeFile(input,data);data=null;cprog(55,'Compressing PDF…',true);status('Compressing locally ('+preset+')…');")
+          s=s.replace("let raw=gs.FS.readFile(output,{encoding:'binary'}),bytes=", "cprog(85,'Creating result…');let raw=gs.FS.readFile(output,{encoding:'binary'}),bytes=")
+          s=s.replace("status('Compression complete. Temporary Ghostscript files removed.')", "cprog(100,'Complete');status('Compression complete. Temporary Ghostscript files removed.')")
+          s=s.replace("status('Compression failed: '+e.message)", "cprog(0,'Compression failed');status('Compression failed: '+e.message)")
           p.write_text(s)
           PY
           cat > dist/sw.js <<'EOF'
-          const CACHE='local-pdf-tools-offline-v2';
+          const CACHE='local-pdf-tools-offline-v3';
           const SHELL=['./','./index.html','./manifest.webmanifest','./icon.svg','./vendor/pdf-lib/pdf-lib.min.js','./vendor/ghostscript/gs.mjs','./vendor/ghostscript/gs.js','./vendor/ghostscript/gs.wasm'];
           self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
           self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
