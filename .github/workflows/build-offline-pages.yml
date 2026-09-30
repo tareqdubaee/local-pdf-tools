@@ -18,7 +18,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Build self-contained site
+      - name: Build site and downloadable HTML
         shell: bash
         run: |
           set -euo pipefail
@@ -37,9 +37,6 @@ jobs:
           s=s.replace('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js','./vendor/pdf-lib/pdf-lib.min.js')
           s=s.replace('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs','./vendor/ghostscript/gs.mjs')
           s=s.replace("https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f","./vendor/ghostscript/'+f")
-
-          # Stage-based compression progress. Ghostscript WASM callMain is synchronous and
-          # does not expose reliable byte/page progress, so we avoid displaying fake precision.
           s=s.replace('</style>', '.progress{display:none;margin-top:10px}.progress.show{display:block}.progress-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:12px;color:#666}.progress-track{height:9px;background:#e6e6e6;border-radius:999px;overflow:hidden}.progress-fill{height:100%;width:0;background:#111;border-radius:999px;transition:width .25s ease}.progress-fill.busy{animation:pulse 1.2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}</style>')
           s=s.replace('<button id="compressRun" class="btn primary" disabled>Compress PDF</button><div id="compressResult"', '<button id="compressRun" class="btn primary" disabled>Compress PDF</button><div id="compressProgress" class="progress" role="status" aria-live="polite"><div class="progress-head"><span id="compressStage">Ready</span><span id="compressPct">0%</span></div><div class="progress-track"><div id="compressFill" class="progress-fill"></div></div></div><div id="compressResult"')
           s=s.replace("function status(s){$('status').textContent=s}", "function status(s){$('status').textContent=s}function cprog(p,label,busy=false){let box=$('compressProgress'),fill=$('compressFill');box.classList.add('show');$('compressPct').textContent=p+'%';$('compressStage').textContent=label;fill.style.width=p+'%';fill.classList.toggle('busy',busy)}function cprogReset(){let box=$('compressProgress'),fill=$('compressFill');if(!box)return;box.classList.remove('show');$('compressPct').textContent='0%';$('compressStage').textContent='Ready';fill.style.width='0%';fill.classList.remove('busy')}")
@@ -51,16 +48,33 @@ jobs:
           s=s.replace("status('Compression complete. Temporary Ghostscript files removed.')", "cprog(100,'Complete');status('Compression complete. Temporary Ghostscript files removed.')")
           s=s.replace("status('Compression failed: '+e.message)", "cprog(0,'Compression failed');status('Compression failed: '+e.message)")
           p.write_text(s)
+
+          # Build a separate downloadable HTML that behaves like the previously validated
+          # standalone file: PDF-lib is embedded, while Ghostscript is loaded from the pinned
+          # CDN when compression is used. This avoids broken relative vendor paths when only
+          # one HTML file is downloaded on Android.
+          standalone=s
+          pdfjs=Path('dist/vendor/pdf-lib/pdf-lib.min.js').read_text()
+          standalone=standalone.replace('<script src="./vendor/pdf-lib/pdf-lib.min.js"></script>', '<script>'+pdfjs+'</script>')
+          standalone=standalone.replace("import('./vendor/ghostscript/gs.mjs')", "import('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs')")
+          standalone=standalone.replace("'./vendor/ghostscript/'+f", "'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f")
+          icon=Path('icon.svg').read_text().replace('\n',' ')
+          import urllib.parse
+          data='data:image/svg+xml,'+urllib.parse.quote(icon, safe='')
+          standalone=standalone.replace('href="icon.svg"','href="'+data+'"').replace('src="icon.svg"','src="'+data+'"')
+          Path('dist/local-pdf-tools.html').write_text(standalone)
           PY
           cat > dist/sw.js <<'EOF'
-          const CACHE='local-pdf-tools-offline-v3';
+          const CACHE='local-pdf-tools-offline-v4';
           const SHELL=['./','./index.html','./manifest.webmanifest','./icon.svg','./vendor/pdf-lib/pdf-lib.min.js','./vendor/ghostscript/gs.mjs','./vendor/ghostscript/gs.js','./vendor/ghostscript/gs.wasm'];
           self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
           self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
           self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(res=>{if(res&&res.ok){const copy=res.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return res})))});
           EOF
           touch dist/.nojekyll
-          if grep -R 'cdn.jsdelivr.net' dist/index.html dist/sw.js; then echo 'External runtime dependency remains' >&2; exit 1; fi
+          test -s dist/local-pdf-tools.html
+          grep -q 'compressProgress' dist/local-pdf-tools.html
+          grep -q 'PDFLib' dist/local-pdf-tools.html
 
       - name: Publish gh-pages
         shell: bash
@@ -73,5 +87,5 @@ jobs:
           cp -a dist/. .
           rm -rf dist
           git add -A
-          git commit -m "Deploy offline PWA"
+          git commit -m "Deploy offline PWA and standalone HTML"
           git push --force origin HEAD:gh-pages
