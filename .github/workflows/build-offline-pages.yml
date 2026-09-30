@@ -19,7 +19,7 @@ jobs:
           set -euo pipefail
           rm -rf dist
           mkdir -p dist/vendor/pdf-lib dist/vendor/ghostscript
-          cp index.html compression-worker.js manifest.webmanifest icon.svg README.md dist/
+          cp index.html manifest.webmanifest icon.svg README.md dist/
           curl -fL --retry 3 https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js -o dist/vendor/pdf-lib/pdf-lib.min.js
           curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs -o dist/vendor/ghostscript/gs.mjs
           curl -fL --retry 3 https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.js -o dist/vendor/ghostscript/gs.js
@@ -29,26 +29,22 @@ jobs:
           import urllib.parse
           p=Path('dist/index.html'); s=p.read_text()
           s=s.replace('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js','./vendor/pdf-lib/pdf-lib.min.js')
+          s=s.replace("import('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs')", "import('./vendor/ghostscript/gs.mjs')")
+          s=s.replace("'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f", "'./vendor/ghostscript/'+f")
           Path('dist/index.html').write_text(s)
-          w=Path('dist/compression-worker.js').read_text()
-          w=w.replace('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs','./vendor/ghostscript/gs.mjs').replace("'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/' + file","'./vendor/ghostscript/' + file")
-          Path('dist/compression-worker.js').write_text(w)
-          # Downloadable single HTML keeps PDF-lib and icon embedded. Compression worker is
-          # created from the worker source at runtime so no companion worker file is required.
           standalone=s
           pdfjs=Path('dist/vendor/pdf-lib/pdf-lib.min.js').read_text()
           standalone=standalone.replace('<script src="./vendor/pdf-lib/pdf-lib.min.js"></script>','<script>'+pdfjs+'</script>')
+          standalone=standalone.replace("import('./vendor/ghostscript/gs.mjs')", "import('https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs')")
+          standalone=standalone.replace("'./vendor/ghostscript/'+f", "'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/'+f")
           icon=Path('icon.svg').read_text().replace('\n',' ')
           data='data:image/svg+xml,'+urllib.parse.quote(icon,safe='')
           standalone=standalone.replace('href="icon.svg"','href="'+data+'"').replace('src="icon.svg"','src="'+data+'"')
-          worker=Path('compression-worker.js').read_text()
-          worker_literal=repr(worker)
-          standalone=standalone.replace("worker=new Worker('compression-worker.js',{type:'module'});", "let workerSource="+worker_literal+";worker=new Worker(URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'})),{type:'module'});")
           Path('dist/local-pdf-tools.html').write_text(standalone)
           PY
           cat > dist/sw.js <<'EOF'
-          const CACHE='local-pdf-tools-v5';
-          const SHELL=['./','./index.html','./compression-worker.js','./manifest.webmanifest','./icon.svg','./vendor/pdf-lib/pdf-lib.min.js','./vendor/ghostscript/gs.mjs','./vendor/ghostscript/gs.js','./vendor/ghostscript/gs.wasm'];
+          const CACHE='local-pdf-tools-v6';
+          const SHELL=['./','./index.html','./manifest.webmanifest','./icon.svg','./vendor/pdf-lib/pdf-lib.min.js','./vendor/ghostscript/gs.mjs','./vendor/ghostscript/gs.js','./vendor/ghostscript/gs.wasm'];
           self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
           self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
           self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))});
@@ -56,7 +52,7 @@ jobs:
           touch dist/.nojekyll
           test -s dist/local-pdf-tools.html
           grep -q 'Compression result' dist/local-pdf-tools.html
-          grep -q 'workerSource' dist/local-pdf-tools.html
+          if grep -q 'compression-worker' dist/local-pdf-tools.html; then echo 'Worker regression remains' >&2; exit 1; fi
       - name: Publish gh-pages
         shell: bash
         run: |
